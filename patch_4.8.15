@@ -1,0 +1,162 @@
+diff -Naur linux-4.8.15/arch/x86/entry/syscalls/syscall_64.tbl linux2-4.8.15/arch/x86/entry/syscalls/syscall_64.tbl
+--- linux-4.8.15/arch/x86/entry/syscalls/syscall_64.tbl	2016-12-15 22:20:48.000000000 +0530
++++ linux2-4.8.15/arch/x86/entry/syscalls/syscall_64.tbl	2017-01-16 15:36:41.941180415 +0530
+@@ -335,6 +335,7 @@
+ 326	common	copy_file_range		sys_copy_file_range
+ 327	64	preadv2			sys_preadv2
+ 328	64	pwritev2		sys_pwritev2
++329	64	kflock		sys_kflock
+ 
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+diff -Naur linux-4.8.15/fs/locks.c linux2-4.8.15/fs/locks.c
+--- linux-4.8.15/fs/locks.c	2016-12-15 22:20:48.000000000 +0530
++++ linux2-4.8.15/fs/locks.c	2017-01-16 15:28:40.778180762 +0530
+@@ -355,6 +355,7 @@
+ 	new->fl_start = fl->fl_start;
+ 	new->fl_end = fl->fl_end;
+ 	new->fl_lmops = fl->fl_lmops;
++	new->fl_key = fl->fl_key;
+ 	new->fl_ops = NULL;
+ 
+ 	if (fl->fl_lmops) {
+@@ -398,7 +399,7 @@
+ 
+ /* Fill in a file_lock structure with an appropriate FLOCK lock. */
+ static struct file_lock *
+-flock_make_lock(struct file *filp, unsigned int cmd)
++flock_make_lock(struct file *filp, unsigned int cmd, unsigned int key)
+ {
+ 	struct file_lock *fl;
+ 	int type = flock_translate_cmd(cmd);
+@@ -416,6 +417,7 @@
+ 	fl->fl_flags = FL_FLOCK;
+ 	fl->fl_type = type;
+ 	fl->fl_end = OFFSET_MAX;
++	fl->fl_key = key;
+ 	
+ 	return fl;
+ }
+@@ -745,10 +747,20 @@
+  */
+ static int locks_conflict(struct file_lock *caller_fl, struct file_lock *sys_fl)
+ {
++	if (sys_fl->fl_key == KEY_EX)
++		goto keyx;
++	if (caller_fl->fl_key == KEY_EX)
++		goto keyx;
++	
++	if(sys_fl->fl_key != caller_fl->fl_key)
++		return 0;
++	
++	keyx:
+ 	if (sys_fl->fl_type == F_WRLCK)
+ 		return 1;
+ 	if (caller_fl->fl_type == F_WRLCK)
+ 		return 1;
++		
+ 	return 0;
+ }
+ 
+@@ -1947,6 +1959,56 @@
+  *	%LOCK_MAND can be combined with %LOCK_READ or %LOCK_WRITE to allow other
+  *	processes read and write access respectively.
+  */
++ 
++SYSCALL_DEFINE3(kflock, unsigned int, fd, unsigned int, cmd, unsigned int, key)
++{
++	struct fd f = fdget(fd);
++	struct file_lock *lock;
++	int can_sleep, unlock;
++	int error;
++
++	error = -EBADF;
++	if (!f.file)
++		goto out;
++
++	can_sleep = !(cmd & LOCK_NB);
++	cmd &= ~LOCK_NB;
++	unlock = (cmd == LOCK_UN);
++
++	if (!unlock && !(cmd & LOCK_MAND) &&
++	    !(f.file->f_mode & (FMODE_READ|FMODE_WRITE)))
++		goto out_putf;
++
++	lock = flock_make_lock(f.file, cmd , key);
++	
++	if (IS_ERR(lock)) {
++		error = PTR_ERR(lock);
++		goto out_putf;
++	}
++
++	if (can_sleep)
++		lock->fl_flags |= FL_SLEEP;
++
++	error = security_file_lock(f.file, lock->fl_type);
++	if (error)
++		goto out_free;
++
++	if (f.file->f_op->flock)
++		error = f.file->f_op->flock(f.file,
++					  (can_sleep) ? F_SETLKW : F_SETLK,
++					  lock);
++	else
++		error = locks_lock_file_wait(f.file, lock);
++
++ out_free:
++	locks_free_lock(lock);
++
++ out_putf:
++	fdput(f);
++ out:
++	return error;
++}
++ 
+ SYSCALL_DEFINE2(flock, unsigned int, fd, unsigned int, cmd)
+ {
+ 	struct fd f = fdget(fd);
+@@ -1966,7 +2028,7 @@
+ 	    !(f.file->f_mode & (FMODE_READ|FMODE_WRITE)))
+ 		goto out_putf;
+ 
+-	lock = flock_make_lock(f.file, cmd);
++	lock = flock_make_lock(f.file, cmd , KEY_EX);
+ 	if (IS_ERR(lock)) {
+ 		error = PTR_ERR(lock);
+ 		goto out_putf;
+diff -Naur linux-4.8.15/include/linux/fs.h linux2-4.8.15/include/linux/fs.h
+--- linux-4.8.15/include/linux/fs.h	2016-12-15 22:20:48.000000000 +0530
++++ linux2-4.8.15/include/linux/fs.h	2017-01-16 15:20:30.209181115 +0530
+@@ -1045,6 +1045,8 @@
+ 			int state;		/* state of grant or error if -ve */
+ 		} afs;
+ 	} fl_u;
++	
++	unsigned int fl_key;
+ };
+ 
+ struct file_lock_context {
+diff -Naur linux-4.8.15/include/linux/syscalls.h linux2-4.8.15/include/linux/syscalls.h
+--- linux-4.8.15/include/linux/syscalls.h	2016-12-15 22:20:48.000000000 +0530
++++ linux2-4.8.15/include/linux/syscalls.h	2017-01-16 15:38:09.825180352 +0530
+@@ -496,6 +496,7 @@
+ asmlinkage long sys_ioctl(unsigned int fd, unsigned int cmd,
+ 				unsigned long arg);
+ asmlinkage long sys_flock(unsigned int fd, unsigned int cmd);
++asmlinkage long sys_kflock(unsigned int fd, unsigned int cmd, unsigned int key);
+ asmlinkage long sys_io_setup(unsigned nr_reqs, aio_context_t __user *ctx);
+ asmlinkage long sys_io_destroy(aio_context_t ctx);
+ asmlinkage long sys_io_getevents(aio_context_t ctx_id,
+diff -Naur linux-4.8.15/include/uapi/asm-generic/fcntl.h linux2-4.8.15/include/uapi/asm-generic/fcntl.h
+--- linux-4.8.15/include/uapi/asm-generic/fcntl.h	2016-12-15 22:20:48.000000000 +0530
++++ linux2-4.8.15/include/uapi/asm-generic/fcntl.h	2017-01-16 15:15:58.937181310 +0530
+@@ -167,6 +167,9 @@
+ #define F_UNLCK		2
+ #endif
+ 
++/* exclusive key in flock*/
++#define KEY_EX	0
++
+ /* for old implementation of bsd flock () */
+ #ifndef F_EXLCK
+ #define F_EXLCK		4	/* or 3 */
