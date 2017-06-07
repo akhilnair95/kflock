@@ -6,4 +6,6 @@ EX - exclusive lock
 
 Setting the key value to -1 invokes the original flock system call.
 
-key values permitted- 1 to sizeof(unsigned int)
+key values permitted for kflock: 1 to sizeof(unsigned int)
+
+The test.c program illustrates the usage.
