@@ -1,0 +1,9 @@
+Usage within test scripts:
+
+./lock <Key_Value> <SH or EX>
+SH - shared lock
+EX - exclusive lock
+
+Setting the key value to -1 invokes the original flock system call.
+
+key values permitted- 1 to sizeof(unsigned int)
