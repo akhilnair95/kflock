@@ -154,7 +154,7 @@ diff -Naur linux-4.8.15/include/uapi/asm-generic/fcntl.h linux2-4.8.15/include/u
  #define F_UNLCK		2
  #endif
  
-+/* exclusive key in flock*/
++/* fully exclusive key in flock*/
 +#define KEY_EX	0
 +
  /* for old implementation of bsd flock () */
