@@ -6,8 +6,6 @@ Usage:
 Compile the lock.c program
 cc -o lock lock.c
 
-Usage within test scripts:
-
 ./lock <Key_Value> <SH or EX>
 SH - shared lock
 EX - exclusive lock
@@ -16,4 +14,4 @@ Setting the key value to -1 invokes the original flock system call.
 
 key values permitted for kflock: 1 to sizeof(unsigned int)
 
-The test.c program illustrates the usage.
+Some sample test senarios are provided in shell scripts.
