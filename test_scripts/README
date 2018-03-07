@@ -1,3 +1,11 @@
+Some sample test scripts to test kflock
+
+Usage:
+------------
+
+Compile the lock.c program
+cc -o lock lock.c
+
 Usage within test scripts:
 
 ./lock <Key_Value> <SH or EX>
